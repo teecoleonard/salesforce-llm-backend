@@ -9,7 +9,7 @@ const axios = require("axios");
 const rateLimit = require("express-rate-limit");
 const helmet = require("helmet");
 
-// Lista de variáveis obrigatórias
+// Variáveis de ambiente obrigatórias
 const requiredEnv = [
   "PORT",
   "HF_API_KEY",
@@ -17,18 +17,16 @@ const requiredEnv = [
   "ALLOWED_ORIGINS"
 ];
 
-// Verifica se todas estão definidas
 const missingEnv = requiredEnv.filter(key => !process.env[key]);
 if (missingEnv.length > 0) {
   console.error("As seguintes variáveis de ambiente estão faltando:", missingEnv.join(", "));
   process.exit(1);
 }
 
-// Porta e variáveis
 const port = process.env.PORT || 3000;
 const useThirdPartyRouter = process.env.USE_THIRD_PARTY_ROUTER === 'true';
 
-// Apenas para testes locais com TLS (não recomendado em produção)
+// Desabilita verificação TLS apenas em desenvolvimento
 if (process.env.NODE_ENV !== 'production') {
   process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 }
@@ -36,7 +34,6 @@ if (process.env.NODE_ENV !== 'production') {
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 
-// Helmet.js para segurança
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -65,7 +62,6 @@ app.use(helmet({
   xssFilter: true,
 }));
 
-// Configura CORS
 const allowedOrigins = process.env.ALLOWED_ORIGINS.split(",").map(origin => origin.trim());
 app.use(cors({
   origin: (origin, callback) => {
@@ -78,7 +74,6 @@ app.use(cors({
   credentials: true
 }));
 
-// Configuração de Rate Limiting
 const limiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
   max: parseInt(process.env.RATE_LIMIT_MAX) || 100,
@@ -92,7 +87,7 @@ const limiter = rateLimit({
 
 app.use(limiter);
 
-// Função para sanitizar logs (remove dados sensíveis)
+// Remove dados sensíveis dos logs
 function sanitizeForLogging(data) {
   if (typeof data !== 'object' || data === null) {
     return data;
@@ -113,7 +108,6 @@ function sanitizeForLogging(data) {
   return sanitized;
 }
 
-// Middleware de logging sanitizado
 app.use((req, res, next) => {
   const start = Date.now();
   res.on('finish', () => {
@@ -130,7 +124,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// Middleware de validação de API key
 function validateApiKey(req, res, next) {
   const apiKey = req.headers['api-key'];
   
@@ -141,8 +134,6 @@ function validateApiKey(req, res, next) {
     });
   }
   
-  // Valida se a API key corresponde à chave configurada
-  // Em produção, você pode querer validar contra um banco de dados
   if (apiKey !== process.env.HF_API_KEY && !process.env.ALLOWED_API_KEYS?.split(',').includes(apiKey)) {
     return res.status(401).json({
       error: "authentication_error",
@@ -153,7 +144,23 @@ function validateApiKey(req, res, next) {
   next();
 }
 
-// Função para processar e otimizar mensagens
+// Validação opcional de API key (para Named Credentials sem auth)
+function validateApiKeyOptional(req, res, next) {
+  const apiKey = req.headers['api-key'];
+  
+  if (apiKey) {
+    if (apiKey !== process.env.HF_API_KEY && !process.env.ALLOWED_API_KEYS?.split(',').includes(apiKey)) {
+      return res.status(401).json({
+        error: "authentication_error",
+        message: "API key inválida."
+      });
+    }
+  }
+  
+  next();
+}
+
+// Processa e otimiza mensagens: concatena múltiplas system messages em uma única
 function processMessages(messages) {
   if (!Array.isArray(messages) || messages.length === 0) {
     return messages;
@@ -162,12 +169,10 @@ function processMessages(messages) {
   const processed = [];
   let systemContent = [];
   
-  // Separa system messages e outras mensagens
   for (const msg of messages) {
     if (msg.role === 'system') {
       systemContent.push(msg.content);
     } else {
-      // Se encontrou uma mensagem não-system e há system messages acumuladas
       if (systemContent.length > 0) {
         processed.push({
           role: 'system',
@@ -179,7 +184,6 @@ function processMessages(messages) {
     }
   }
   
-  // Se sobrou system messages no final
   if (systemContent.length > 0) {
     processed.push({
       role: 'system',
@@ -190,7 +194,6 @@ function processMessages(messages) {
   return processed;
 }
 
-// Endpoint de Health Check
 app.get("/health", (req, res) => {
   res.json({
     status: "ok",
@@ -200,11 +203,100 @@ app.get("/health", (req, res) => {
   });
 });
 
-// Rota principal de chat completions (padrão Salesforce LLM Open Connector)
+// Rota /chat - compatível com código Apex (formato antigo com prompt)
+app.post("/chat", validateApiKeyOptional, async (req, res) => {
+  const { prompt, max_tokens } = req.body;
+
+  if (!prompt || String(prompt).trim().length === 0) {
+    return res.status(400).json({
+      error: "validation_error",
+      message: "O campo 'prompt' é obrigatório"
+    });
+  }
+
+  // Converte prompt para formato messages
+  const model = process.env.MODEL || req.body.model || "mistralai/Mixtral-8x7B-Instruct-v0.1";
+  const messages = [
+    { role: "user", content: String(prompt) }
+  ];
+
+  const payload = {
+    model: model,
+    messages: messages
+  };
+
+  if (max_tokens !== undefined) {
+    payload.max_tokens = max_tokens;
+  }
+
+  try {
+    let apiUrl = process.env.HF_API_BASE;
+    
+    // Ajusta URL para third-party routers (ex: Together AI)
+    if (useThirdPartyRouter) {
+      if (!apiUrl.endsWith('/chat/completions')) {
+        apiUrl = apiUrl.endsWith('/') 
+          ? `${apiUrl}chat/completions` 
+          : `${apiUrl}/chat/completions`;
+      }
+    }
+
+    const response = await axios.post(
+      apiUrl,
+      payload,
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.HF_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        timeout: parseInt(process.env.HF_API_TIMEOUT) || 30000
+      }
+    );
+
+    res.json(response.data);
+  } catch (err) {
+    const errorMessage = err.response?.data || err.message;
+    const statusCode = err.response?.status || 500;
+
+    console.error("Erro na requisição ao Hugging Face:", sanitizeForLogging({
+      status: statusCode,
+      message: errorMessage,
+      promptLength: String(prompt).length
+    }));
+
+    if (err.code === 'ECONNABORTED' || err.code === 'ETIMEDOUT') {
+      return res.status(504).json({
+        error: "timeout_error",
+        message: "A requisição ao modelo LLM expirou. Tente novamente."
+      });
+    }
+
+    if (statusCode === 401 || statusCode === 403) {
+      return res.status(500).json({
+        error: "authentication_error",
+        message: "Erro de autenticação com a API do Hugging Face"
+      });
+    }
+
+    if (statusCode === 429) {
+      return res.status(429).json({
+        error: "rate_limit_exceeded",
+        message: "Limite de requisições ao Hugging Face excedido"
+      });
+    }
+
+    res.status(statusCode >= 400 && statusCode < 500 ? statusCode : 500).json({
+      error: "hf_error",
+      message: "Erro ao processar requisição com o modelo LLM",
+      detail: errorMessage
+    });
+  }
+});
+
+// Rota /chat/completions - padrão Salesforce LLM Open Connector
 app.post("/chat/completions", validateApiKey, async (req, res) => {
   const { model, messages, max_tokens, temperature, n, parameters } = req.body;
 
-  // Validação do modelo
   if (!model) {
     return res.status(400).json({
       error: "validation_error",
@@ -212,7 +304,6 @@ app.post("/chat/completions", validateApiKey, async (req, res) => {
     });
   }
 
-  // Validação das mensagens
   if (!messages || !Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({
       error: "validation_error",
@@ -220,7 +311,6 @@ app.post("/chat/completions", validateApiKey, async (req, res) => {
     });
   }
 
-  // Valida cada mensagem
   for (const msg of messages) {
     if (!msg.role || !msg.content) {
       return res.status(400).json({
@@ -244,16 +334,14 @@ app.post("/chat/completions", validateApiKey, async (req, res) => {
     }
   }
 
-  // Processa mensagens (concatena system messages)
+  // Concatena system messages
   const processedMessages = processMessages(messages);
 
-  // Prepara o payload para Hugging Face
   const payload = {
     model: model,
     messages: processedMessages
   };
 
-  // Adiciona parâmetros opcionais
   if (max_tokens !== undefined) {
     payload.max_tokens = max_tokens;
   }
@@ -267,15 +355,12 @@ app.post("/chat/completions", validateApiKey, async (req, res) => {
     if (parameters.top_p !== undefined) {
       payload.top_p = parameters.top_p;
     }
-    // Adiciona outros parâmetros se necessário
     Object.assign(payload, parameters);
   }
 
   try {
-    // Determina a URL base da API
     let apiUrl = process.env.HF_API_BASE;
     
-    // Se usar third-party router, adiciona o path de chat completions
     if (useThirdPartyRouter) {
       if (!apiUrl.endsWith('/chat/completions')) {
         apiUrl = apiUrl.endsWith('/') 
@@ -296,7 +381,6 @@ app.post("/chat/completions", validateApiKey, async (req, res) => {
       }
     );
 
-    // Retorna a resposta do Hugging Face (já está no formato correto)
     res.json(response.data);
   } catch (err) {
     const errorMessage = err.response?.data || err.message;
@@ -338,7 +422,6 @@ app.post("/chat/completions", validateApiKey, async (req, res) => {
   }
 });
 
-// Middleware de tratamento de erros 404
 app.use((req, res) => {
   res.status(404).json({
     error: "not_found",
@@ -346,7 +429,6 @@ app.use((req, res) => {
   });
 });
 
-// Middleware de tratamento de erros gerais
 app.use((err, req, res, next) => {
   console.error("Erro não tratado:", sanitizeForLogging({
     message: err.message,
@@ -358,7 +440,6 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Inicializa o servidor
 app.listen(port, () => {
   console.log("Servidor iniciado com sucesso!");
   console.log(`Rodando na porta ${port}`);
