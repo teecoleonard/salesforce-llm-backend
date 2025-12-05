@@ -261,7 +261,20 @@ app.post("/chat", validateApiKeyOptional, async (req, res) => {
           ? `${apiUrl}chat/completions` 
           : `${apiUrl}/chat/completions`;
       }
+    } else {
+      // Para Hugging Face, usa o endpoint v1/chat/completions
+      // Remove qualquer path existente e adiciona /v1/chat/completions
+      const baseUrl = apiUrl.split('/models')[0].split('/v1')[0];
+      apiUrl = baseUrl.endsWith('/') 
+        ? `${baseUrl}v1/chat/completions` 
+        : `${baseUrl}/v1/chat/completions`;
     }
+
+    console.log("Chamando Hugging Face API:", {
+      url: apiUrl,
+      model: model,
+      payloadKeys: Object.keys(payload)
+    });
 
     const response = await axios.post(
       apiUrl,
@@ -283,7 +296,9 @@ app.post("/chat", validateApiKeyOptional, async (req, res) => {
     console.error("Erro na requisição ao Hugging Face:", sanitizeForLogging({
       status: statusCode,
       message: errorMessage,
-      promptLength: String(prompt).length
+      promptLength: String(prompt).length,
+      url: apiUrl,
+      payload: sanitizeForLogging(payload)
     }));
 
     if (err.code === 'ECONNABORTED' || err.code === 'ETIMEDOUT') {
@@ -389,6 +404,12 @@ app.post("/chat/completions", validateApiKey, async (req, res) => {
           ? `${apiUrl}chat/completions` 
           : `${apiUrl}/chat/completions`;
       }
+    } else {
+      // Para Hugging Face, usa o endpoint v1/chat/completions
+      const baseUrl = apiUrl.split('/models')[0].split('/v1')[0];
+      apiUrl = baseUrl.endsWith('/') 
+        ? `${baseUrl}v1/chat/completions` 
+        : `${baseUrl}/v1/chat/completions`;
     }
 
     const response = await axios.post(
