@@ -65,13 +65,27 @@ app.use(helmet({
 const allowedOrigins = process.env.ALLOWED_ORIGINS.split(",").map(origin => origin.trim());
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('Não permitido pelo CORS'));
+    // Permite requisições sem origin (Named Credentials, Postman, etc)
+    if (!origin) {
+      return callback(null, true);
     }
+    
+    // Verifica se está na lista de permitidos
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    
+    // Permite domínios do Salesforce (*.salesforce.com, *.force.com, *.lightning.force.com)
+    if (origin.includes('.salesforce.com') || origin.includes('.force.com') || origin.includes('.lightning.force.com')) {
+      return callback(null, true);
+    }
+    
+    console.warn(`CORS bloqueado para origem: ${origin}`);
+    callback(new Error('Não permitido pelo CORS'));
   },
-  credentials: true
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'api-key']
 }));
 
 const limiter = rateLimit({
@@ -206,6 +220,13 @@ app.get("/health", (req, res) => {
 
 // Rota /chat - compatível com código Apex (formato antigo com prompt)
 app.post("/chat", validateApiKeyOptional, async (req, res) => {
+  console.log("Rota /chat chamada", { 
+    method: req.method,
+    path: req.path,
+    origin: req.headers.origin,
+    body: sanitizeForLogging(req.body) 
+  });
+  
   const { prompt, max_tokens } = req.body;
 
   if (!prompt || String(prompt).trim().length === 0) {
@@ -448,6 +469,7 @@ app.listen(port, () => {
   console.log(`Modelo padrão: ${process.env.MODEL || "Salesforce/xLAM-v0.1-r"}`);
   console.log(`Rate Limit: ${process.env.RATE_LIMIT_MAX || 100} req/${(parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 900000) / 1000 / 60}min`);
   console.log(`Third-party router: ${useThirdPartyRouter ? 'Habilitado' : 'Desabilitado'}`);
+  console.log(`Rotas disponíveis: POST /chat, POST /chat/completions, GET /health`);
   if (useThirdPartyRouter) {
     console.log(`API URL: ${process.env.HF_API_BASE}`);
   }
