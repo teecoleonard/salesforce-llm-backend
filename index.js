@@ -1,32 +1,46 @@
-require("dotenv").config({ path: "./.env" });
+// Carrega dotenv apenas em ambiente local
+if (process.env.NODE_ENV !== 'production') {
+  require('dotenv').config();
+}
 
-const fs = require("fs");
-const path = require("path");
 const express = require("express");
 const cors = require("cors");
 const axios = require("axios");
 
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"; // só para teste local
+// Lista de variáveis obrigatórias
+const requiredEnv = [
+  "PORT",
+  "HF_API_KEY",
+  "HF_API_BASE",
+  "MODEL",
+  "ALLOWED_ORIGINS"
+];
 
-// Carrega o .env manualmente
-const envPath = path.resolve(__dirname, ".env");
-const envData = fs.readFileSync(envPath, "utf-8");
+// Verifica se todas estão definidas
+const missingEnv = requiredEnv.filter(key => !process.env[key]);
+if (missingEnv.length > 0) {
+  console.error("As seguintes variáveis de ambiente estão faltando:", missingEnv.join(", "));
+  process.exit(1); // Encerra a aplicação
+}
 
-envData.split("\n").forEach(line => {
-  const match = line.match(/^([a-zA-Z_]+)=(.*)$/);
-  if (match) {
-    const key = match[1];
-    const value = match[2].trim();
-    process.env[key] = value; // força sobrescrever
-  }
-});
+// Porta e variáveis
+const port = process.env.PORT || 3000;
+
+// Apenas para testes locais com TLS (não recomendado em produção)
+if (process.env.NODE_ENV !== 'production') {
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+}
 
 const app = express();
 app.use(express.json());
+
+// Configura CORS
+const allowedOrigins = process.env.ALLOWED_ORIGINS.split(",");
 app.use(cors({
-  origin: process.env.ALLOWED_ORIGINS.split(",")
+  origin: allowedOrigins
 }));
 
+// Rota principal
 app.post("/chat", async (req, res) => {
   const { prompt } = req.body;
 
@@ -36,10 +50,7 @@ app.post("/chat", async (req, res) => {
       {
         model: process.env.MODEL,
         messages: [
-          {
-            role: "user",
-            content: prompt
-          }
+          { role: "user", content: prompt }
         ]
       },
       {
@@ -57,7 +68,8 @@ app.post("/chat", async (req, res) => {
   }
 });
 
-app.listen(process.env.PORT, () => {
-  console.log(`Servidor rodando na porta ${process.env.PORT}`);
+// Inicializa o servidor
+app.listen(port, () => {
+  console.log(`Servidor rodando na porta ${port}`);
   console.log("Modelo atual:", process.env.MODEL);
 });
