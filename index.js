@@ -199,6 +199,7 @@ app.get("/health", (req, res) => {
     status: "ok",
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || "development",
+    defaultModel: process.env.MODEL || "Salesforce/xLAM-v0.1-r",
     useThirdPartyRouter: useThirdPartyRouter
   });
 });
@@ -215,7 +216,7 @@ app.post("/chat", validateApiKeyOptional, async (req, res) => {
   }
 
   // Converte prompt para formato messages
-  const model = process.env.MODEL || req.body.model || "mistralai/Mixtral-8x7B-Instruct-v0.1";
+  const model = process.env.MODEL || req.body.model || "Salesforce/xLAM-v0.1-r";
   const messages = [
     { role: "user", content: String(prompt) }
   ];
@@ -444,6 +445,7 @@ app.listen(port, () => {
   console.log("Servidor iniciado com sucesso!");
   console.log(`Rodando na porta ${port}`);
   console.log(`Ambiente: ${process.env.NODE_ENV || "development"}`);
+  console.log(`Modelo padrão: ${process.env.MODEL || "Salesforce/xLAM-v0.1-r"}`);
   console.log(`Rate Limit: ${process.env.RATE_LIMIT_MAX || 100} req/${(parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 900000) / 1000 / 60}min`);
   console.log(`Third-party router: ${useThirdPartyRouter ? 'Habilitado' : 'Desabilitado'}`);
   if (useThirdPartyRouter) {
